@@ -131,7 +131,7 @@ The API handles errors gracefully and provides appropriate responses.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE]() file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/droffilc1/channel-digest/blob/main/LICENSE) file for details.
 
 ## Support
 
