@@ -4,6 +4,10 @@
 
 The **Channel Digest Service** is a FastAPI application that fetches channel statistics from an external API and sends a digest summary to a specified webhook endpoint.
 
+## Screenshots
+
+![Description of Channel Digest Integration](https://github.com/user-attachments/assets/86d56629-eaca-44c0-8e05-b4cc59f7eaf3)
+
 ## Features
 
 - Fetches channel details from an external API.
@@ -92,15 +96,10 @@ uvicorn main:app
 
 ```json
 {
-  "channel_id": "channel_id",
-  "return_url": "return_url",
+  "channel_id": "string",
+  "return_url": "string",
+  "organisation_id": "string",
   "settings": [
-    {
-      "label": "site-1",
-      "type": "text",
-      "required": true,
-      "default": "https://telex.im"
-    },
     {
       "label": "interval",
       "type": "text",
