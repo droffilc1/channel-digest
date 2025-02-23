@@ -1,22 +1,22 @@
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Request, Security
 from fastapi.responses import JSONResponse
+from fastapi.security import OAuth2PasswordBearer
 from api.db.schemas import DigestPayload
 
 router = APIRouter()
 
 
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+
 async def get_auth_data(request: Request):
-    """Retrieve authentication data from client's localStorage"""
+    """Retrieve authentication data from Swagger's Authorize header"""
     try:
-        # Get localStorage data from request headers
-        auth_header = request.headers.get("Authorization", "")
+        token = await oauth2_scheme(request)
 
-        if not auth_header:
+        if not token:
             raise ValueError("Missing required authentication data")
-
-        # Remove 'Bearer ' prefix if present
-        token = auth_header.replace("Bearer ", "")
 
         return token
     except Exception as e:
@@ -159,7 +159,10 @@ async def generate_digest(payload: DigestPayload, request: Request):
 
 @router.post("/tick", status_code=202)
 def process_digest(
-    payload: DigestPayload, request: Request, background_tasks: BackgroundTasks
+    payload: DigestPayload,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    token: str = Security(oauth2_scheme),
 ):
     background_tasks.add_task(generate_digest, payload, request)
     return JSONResponse(content={"status": "accepted"}, status_code=202)
