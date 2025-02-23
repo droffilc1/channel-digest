@@ -12,4 +12,5 @@ class Setting(BaseModel):
 class DigestPayload(BaseModel):
     channel_id: str
     return_url: str
+    organisation_id: str
     settings: List[Setting]

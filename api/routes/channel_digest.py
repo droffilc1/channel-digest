@@ -1,10 +1,27 @@
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
-
 from api.db.schemas import DigestPayload
 
 router = APIRouter()
+
+
+async def get_auth_data(request: Request):
+    """Retrieve authentication data from client's localStorage"""
+    try:
+        # Get localStorage data from request headers
+        auth_header = request.headers.get("Authorization", "")
+
+        if not auth_header:
+            raise ValueError("Missing required authentication data")
+
+        # Remove 'Bearer ' prefix if present
+        token = auth_header.replace("Bearer ", "")
+
+        return token
+    except Exception as e:
+        print(f"Error getting auth data: {str(e)}")
+        raise
 
 
 @router.get("/integration.json")
@@ -25,7 +42,7 @@ def get_integration_json(request: Request):
             "integration_type": "interval",
             "key_features": [
                 "Fetches channel details from an external API.",
-                "Constructs a digest containing message count, active users, and trending keywords.",
+                "Constructs a digest containing total messages, active users, and trending keywords.",
                 "Sends the digest to a configured webhook.",
             ],
             "author": "Clifford Mapesa",
@@ -34,7 +51,7 @@ def get_integration_json(request: Request):
                     "label": "channel_id",
                     "type": "text",
                     "required": True,
-                    "default": "https://telex.im",
+                    "default": "your-channel-id",
                 },
                 {
                     "label": "return_url",
@@ -55,43 +72,94 @@ def get_integration_json(request: Request):
     }
 
 
-async def fetch_channel_data(channel_id: str):
-    api_url = "https://ping.telex.im/api/v1/channels"
+async def fetch_channel_data(channel_id: str, org_id: str, request: Request):
+    bearer_token = await get_auth_data(request)
+    api_url = f"https://api.telex.im/api/v1/organisations/{org_id}/channels"
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Accept": "application/json",
+    }
+
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(api_url, timeout=10)
+            response = await client.get(api_url, headers=headers, timeout=10)
+
+            response.raise_for_status()
             data = response.json()
-            channels = data.get("data", [])
-            return next((ch for ch in channels if ch["id"] == channel_id), None)
+
+            # Extract channels array
+            channels = data.get("data", {}).get("channels", [])
+
+            # Process valid channels
+            valid_channels = [ch for ch in channels if isinstance(ch, dict)]
+            target_id = str(channel_id).strip()
+
+            # Find matching channel
+            found_channel = None
+            for ch in valid_channels:
+                ch_id = str(ch.get("channels_id", "")).strip()
+                if ch_id == target_id:
+                    found_channel = ch
+                    break
+
+            return found_channel
+
     except Exception as e:
         return None
 
 
-async def generate_digest(payload: DigestPayload):
-    channel = await fetch_channel_data(payload.channel_id)
-    if not channel:
-        message = f"Channel {payload.channel_id} not found."
-        status = "error"
-    else:
-        message = (
-            f"Channel Digest for {channel['name']}:\n"
-            f"- Total messages: {channel.get('message_count', 0)}\n"
-            f"- Active users: {channel.get('active_users', 0)}\n"
-            f"- Trending keywords: {', '.join(channel.get('trending_keywords', [])) or 'N/A'}"
+async def generate_digest(payload: DigestPayload, request: Request):
+    try:
+        channel = await fetch_channel_data(
+            payload.channel_id, payload.organisation_id, request
         )
-        status = "info"
 
-    data = {
-        "message": message,
-        "username": "Channel Digest",
-        "event_name": "Channel Digest Report",
-        "status": status,
-    }
-    async with httpx.AsyncClient() as client:
-        await client.post(payload.return_url, json=data)
+        if not channel:
+            message = f"Channel {payload.channel_id} not found."
+            status = "error"
+        else:
+            channel_name = channel.get("name", "Unknown")
+            total_messages = channel.get("message_count", 0)
+            active_users = channel.get("user_count", 0)
+            trending_keywords = channel.get("trending_keywords", [])
+
+            message = (
+                f"Channel Digest for {channel_name}:\n"
+                f"- Total messages: {total_messages}\n"
+                f"- Active users: {active_users}\n"
+                f"- Trending keywords: {', '.join(trending_keywords) or 'N/A'}"
+            )
+            status = "info"
+
+        data = {
+            "message": message,
+            "username": "Channel Digest",
+            "event_name": "Channel Digest Report",
+            "status": status,
+        }
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(payload.return_url, json=data, timeout=10)
+                print(f"Digest send response status: {response.status_code}")
+        except Exception as e:
+            print(f"\nError sending digest: {str(e)}")
+
+    except ValueError as e:
+        # Handle authentication errors
+        data = {
+            "message": f"Authentication error: {str(e)}",
+            "username": "Channel Digest",
+            "event_name": "Channel Digest Report",
+            "status": "error",
+        }
+        async with httpx.AsyncClient() as client:
+            await client.post(payload.return_url, json=data, timeout=10)
 
 
 @router.post("/tick", status_code=202)
-def process_digest(payload: DigestPayload, background_tasks: BackgroundTasks):
-    background_tasks.add_task(generate_digest, payload)
+def process_digest(
+    payload: DigestPayload, request: Request, background_tasks: BackgroundTasks
+):
+    background_tasks.add_task(generate_digest, payload, request)
     return JSONResponse(content={"status": "accepted"}, status_code=202)
