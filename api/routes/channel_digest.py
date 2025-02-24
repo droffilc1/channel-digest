@@ -37,7 +37,7 @@ def get_integration_json(request: Request):
                     "label": "channel_id",
                     "type": "text",
                     "required": True,
-                    "default": "your-channel-id",
+                    "default": "",
                 },
                 {
                     "label": "return_url",
