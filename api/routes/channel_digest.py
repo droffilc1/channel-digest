@@ -1,13 +1,13 @@
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Request, Security
+from fastapi.security import APIKeyHeader
 from fastapi.responses import JSONResponse
-from fastapi.security import OAuth2PasswordBearer
 
 from api.db.schemas import DigestPayload
 
 router = APIRouter()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+api_key_header = APIKeyHeader(name="Authorization")
 
 
 @router.get("/integration.json")
@@ -246,10 +246,15 @@ async def generate_digest(payload: DigestPayload, token: str):
 
 
 @router.post("/tick", status_code=202)
-def process_digest(
+async def process_digest(
     payload: DigestPayload,
     background_tasks: BackgroundTasks,
-    token: str = Security(oauth2_scheme),
+    api_key: str = Security(api_key_header),
 ):
+    # Extract token (remove 'Bearer ' prefix if present)
+    token = api_key
+    if api_key.startswith("Bearer "):
+        token = api_key.replace("Bearer ", "")
+
     background_tasks.add_task(generate_digest, payload, token)
     return JSONResponse(content={"status": "accepted"}, status_code=202)
