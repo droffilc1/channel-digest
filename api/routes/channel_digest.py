@@ -6,22 +6,7 @@ from api.db.schemas import DigestPayload
 
 router = APIRouter()
 
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
-
-async def get_auth_data(request: Request):
-    """Retrieve authentication data from Swagger's Authorize header"""
-    try:
-        token = await oauth2_scheme(request)
-
-        if not token:
-            raise ValueError("Missing required authentication data")
-
-        return token
-    except Exception as e:
-        print(f"Error getting auth data: {str(e)}")
-        raise
 
 
 @router.get("/integration.json")
@@ -72,62 +57,41 @@ def get_integration_json(request: Request):
     }
 
 
-async def fetch_channel_data(channel_id: str, org_id: str, request: Request):
-    bearer_token = await get_auth_data(request)
+async def fetch_channel_data(channel_id: str, org_id: str, token: str):
     api_url = f"https://api.telex.im/api/v1/organisations/{org_id}/channels"
-    headers = {
-        "Authorization": f"Bearer {bearer_token}",
-        "Accept": "application/json",
-    }
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(api_url, headers=headers, timeout=10)
-
             response.raise_for_status()
             data = response.json()
-
-            # Extract channels array
             channels = data.get("data", {}).get("channels", [])
-
-            # Process valid channels
-            valid_channels = [ch for ch in channels if isinstance(ch, dict)]
-            target_id = str(channel_id).strip()
-
-            # Find matching channel
-            found_channel = None
-            for ch in valid_channels:
-                ch_id = str(ch.get("channels_id", "")).strip()
-                if ch_id == target_id:
-                    found_channel = ch
-                    break
-
-            return found_channel
-
-    except Exception as e:
+            return next(
+                (
+                    ch
+                    for ch in channels
+                    if str(ch.get("channels_id", "")).strip() == channel_id
+                ),
+                None,
+            )
+    except Exception:
         return None
 
 
-async def generate_digest(payload: DigestPayload, request: Request):
+async def generate_digest(payload: DigestPayload, token: str):
     try:
         channel = await fetch_channel_data(
-            payload.channel_id, payload.organisation_id, request
+            payload.channel_id, payload.organisation_id, token
         )
-
         if not channel:
-            message = f"Channel {payload.channel_id} not found."
-            status = "error"
+            message, status = f"Channel {payload.channel_id} not found.", "error"
         else:
-            channel_name = channel.get("name", "Unknown")
-            total_messages = channel.get("message_count", 0)
-            active_users = channel.get("user_count", 0)
-            trending_keywords = channel.get("trending_keywords", [])
-
             message = (
-                f"Channel Digest for {channel_name}:\n"
-                f"- Total messages: {total_messages}\n"
-                f"- Active users: {active_users}\n"
-                f"- Trending keywords: {', '.join(trending_keywords) or 'N/A'}"
+                f"Channel Digest for {channel.get('name', 'Unknown')}\n"
+                f"- Total messages: {channel.get('message_count', 0)}\n"
+                f"- Active users: {channel.get('user_count', 0)}\n"
+                f"- Trending keywords: {', '.join(channel.get('trending_keywords', [])) or 'N/A'}"
             )
             status = "info"
 
@@ -137,16 +101,9 @@ async def generate_digest(payload: DigestPayload, request: Request):
             "event_name": "Channel Digest Report",
             "status": status,
         }
-
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(payload.return_url, json=data, timeout=10)
-                print(f"Digest send response status: {response.status_code}")
-        except Exception as e:
-            print(f"\nError sending digest: {str(e)}")
-
+        async with httpx.AsyncClient() as client:
+            await client.post(payload.return_url, json=data, timeout=10)
     except ValueError as e:
-        # Handle authentication errors
         data = {
             "message": f"Authentication error: {str(e)}",
             "username": "Channel Digest",
@@ -160,9 +117,8 @@ async def generate_digest(payload: DigestPayload, request: Request):
 @router.post("/tick", status_code=202)
 def process_digest(
     payload: DigestPayload,
-    request: Request,
     background_tasks: BackgroundTasks,
     token: str = Security(oauth2_scheme),
 ):
-    background_tasks.add_task(generate_digest, payload, request)
+    background_tasks.add_task(generate_digest, payload, token)
     return JSONResponse(content={"status": "accepted"}, status_code=202)
