@@ -20,7 +20,7 @@ def get_integration_json(request: Request):
                 "app_name": "Channel Digest",
                 "app_description": "Generates a digest report for a channel",
                 "app_url": base_url,
-                "app_logo": "https://i.imgur.com/lZqvffp.png",
+                "app_logo": "https://github.com/user-attachments/assets/f6907df9-dbaa-4c0b-9a51-3b1762ecd9ee",
                 "background_color": "#fff",
             },
             "is_active": True,
@@ -61,52 +61,114 @@ def get_integration_json(request: Request):
 async def fetch_channel_data(channel_id: str, org_id: str, token: str):
     api_url = f"https://api.telex.im/api/v1/organisations/{org_id}/channels"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"limit": 100}  # Increase the limit per page
+    params = {"limit": 100}
 
     try:
         async with httpx.AsyncClient() as client:
+            # First, get basic channel info
+            channel = None
+
+            # Try direct endpoint first
             direct_url = f"{api_url}/{channel_id}"
             try:
                 response = await client.get(direct_url, headers=headers, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
-                    print(f"Channel Data: {data}")
                     channel = data.get("data", {}).get("channel")
-                    if channel:
-                        print(f"Found channel directly: {channel}")
-                        return channel
-            except Exception as e:
-                print(f"Direct channel fetch failed: {e}")
+            except Exception:
+                pass
 
             # If direct fetch fails, try paginated list
-            page = 1
-            while True:
-                params["page"] = page
-                response = await client.get(
-                    api_url, headers=headers, params=params, timeout=10
+            if not channel:
+                page = 1
+                while True:
+                    params["page"] = page
+                    response = await client.get(
+                        api_url, headers=headers, params=params, timeout=10
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+
+                    channels = data.get("data", {}).get("channels", [])
+                    if not channels:
+                        break
+
+                    channel = next(
+                        (ch for ch in channels if ch.get("channels_id") == channel_id),
+                        None,
+                    )
+
+                    if channel:
+                        break
+
+                    page += 1
+
+            if not channel:
+                return None
+
+            # Now fetch trending keywords using messages API
+            messages_url = f"{api_url}/{channel_id}/messages"
+            try:
+                msg_response = await client.get(
+                    messages_url,
+                    headers=headers,
+                    params={"limit": 50, "sort": "desc"},
+                    timeout=10,
                 )
-                response.raise_for_status()
-                data = response.json()
 
-                channels = data.get("data", {}).get("channels", [])
-                if not channels:
-                    break
+                if msg_response.status_code == 200:
+                    msg_data = msg_response.json()
+                    messages = msg_data.get("data", {}).get("messages", [])
 
-                channel = next(
-                    (ch for ch in channels if ch.get("channels_id") == channel_id), None
-                )
+                    # Extract text from messages
+                    all_text = " ".join([msg.get("text", "") for msg in messages])
 
-                if channel:
-                    print(f"Found channel on page {page}: {channel}")
-                    return channel
+                    # Simple keyword extraction
+                    if all_text:
+                        # Remove common words
+                        common_words = {
+                            "the",
+                            "a",
+                            "an",
+                            "and",
+                            "or",
+                            "but",
+                            "in",
+                            "on",
+                            "at",
+                            "to",
+                            "for",
+                            "is",
+                            "are",
+                            "was",
+                            "were",
+                        }
+                        words = [
+                            word.lower()
+                            for word in all_text.split()
+                            if len(word) > 3 and word.lower() not in common_words
+                        ]
 
-                page += 1
+                        # Count word frequencies
+                        from collections import Counter
 
-            print(f"Channel not found after checking {page - 1} pages")
-            return None
+                        word_counts = Counter(words)
 
-    except Exception as e:
-        print(f"Error fetching channel data: {e}")
+                        # Get top 5 keywords
+                        trending_keywords = [
+                            word for word, _ in word_counts.most_common(5)
+                        ]
+
+                        # Add trending keywords to channel data
+                        channel["trending_keywords"] = trending_keywords
+                    else:
+                        channel["trending_keywords"] = []
+            except Exception:
+                channel["trending_keywords"] = []
+
+            return channel
+
+    except Exception:
         return None
 
 
@@ -123,14 +185,21 @@ async def generate_digest(payload: DigestPayload, token: str):
             channel_name = channel.get("name", "Unknown")
             message_count = channel.get("message_count", 0)
             user_count = channel.get("user_count", 0)
+            trending_keywords = channel.get("trending_keywords", [])
 
+            # Build the digest message
             message = (
                 f"📊 Channel Digest Report for #{channel_name}\n\n"
                 f"📨 Messages: {message_count}\n"
                 f"👥 Active Users: {user_count}\n"
                 f"🔍 Activity Status: {'Quiet - No messages yet' if message_count == 0 else 'Active'}"
             )
-            status = "info"
+
+            # Add trending keywords if available
+            if trending_keywords:
+                message += f"\n🔥 Trending Keywords: {', '.join(trending_keywords)}"
+
+            status = "success"
 
         data = {
             "event_name": "Channel Digest Report",
@@ -151,10 +220,8 @@ async def generate_digest(payload: DigestPayload, token: str):
                     timeout=10,
                 )
                 response.raise_for_status()
-            except httpx.HTTPError as http_err:
-                raise http_err
-            except Exception as post_err:
-                raise post_err
+            except Exception:
+                raise
 
     except Exception as e:
         error_data = {
@@ -163,9 +230,9 @@ async def generate_digest(payload: DigestPayload, token: str):
             "status": "error",
             "username": "Channel Digest",
         }
-        async with httpx.AsyncClient() as client:
-            try:
-                error_response = await client.post(
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
                     payload.return_url,
                     json=error_data,
                     headers={
@@ -174,8 +241,8 @@ async def generate_digest(payload: DigestPayload, token: str):
                     },
                     timeout=10,
                 )
-            except Exception as error_post_err:
-                raise error_post_err
+        except Exception as error_post_err:
+            raise error_post_err
 
 
 @router.post("/tick", status_code=202)
