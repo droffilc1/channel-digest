@@ -1,5 +1,13 @@
+import os
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Request, Security
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Request,
+    Security,
+    Depends,
+    HTTPException,
+)
 from fastapi.security import APIKeyHeader
 from fastapi.responses import JSONResponse
 from collections import Counter
@@ -10,6 +18,21 @@ from api.db.schemas import DigestPayload
 router = APIRouter()
 
 api_key_header = APIKeyHeader(name="Authorization")
+
+FALLBACK_TOKEN = os.environ.get("API_BEARER_TOKEN", "")
+
+
+def get_api_key(api_key: str = Security(api_key_header)):
+    if api_key:
+        return (
+            api_key.replace("Bearer ", "") if api_key.startswith("Bearer ") else api_key
+        )
+
+    if FALLBACK_TOKEN:
+        return FALLBACK_TOKEN
+
+    # If no fallback either, raise an exception
+    raise HTTPException(status_code=403, detail="API key required")
 
 
 @router.get("/integration.json")
@@ -196,9 +219,8 @@ async def generate_digest(payload: DigestPayload, token: str):
 async def process_digest(
     payload: DigestPayload,
     background_tasks: BackgroundTasks,
-    api_key: str = Security(api_key_header),
+    token: str = Depends(get_api_key),
 ):
-    token = api_key.replace("Bearer ", "") if api_key.startswith("Bearer ") else api_key
-    print(f"Received tick request for channel {payload.channel_id}")
+    # Now you can use the token directly without needing to extract it
     background_tasks.add_task(generate_digest, payload, token)
     return JSONResponse(content={"status": "accepted"}, status_code=202)
