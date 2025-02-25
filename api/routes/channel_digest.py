@@ -295,9 +295,7 @@ async def generate_digest(payload: DigestPayload, token: str):
         logger.error(f"Error generating digest: {str(e)}")
 
 
-# Allow both POST and GET methods for more flexibility during testing
 @router.post("/tick", status_code=202)
-@router.get("/tick", status_code=202)
 async def process_digest(
     request: Request,
     background_tasks: BackgroundTasks,
