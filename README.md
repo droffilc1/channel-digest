@@ -12,7 +12,7 @@ The **Channel Digest Service** is a FastAPI application that fetches channel sta
 
 - Channel Digest on Telex Channel
   
-![Channel Digest on Telex Channel](https://github.com/user-attachments/assets/44e53a24-1a66-4db5-96db-84fbff24f7d1)
+![Channel Digest on Telex Channel](https://github.com/user-attachments/assets/3291b63d-b889-4121-a88d-a02b842131f7)
 
 ## Features
 
